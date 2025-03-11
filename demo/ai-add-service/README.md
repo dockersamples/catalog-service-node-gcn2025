@@ -16,5 +16,5 @@ From the root folder of the repo, run the following - IN ORDER:
 
 ```
 ./demo/sdlc-e2e/setup.sh
-./demo/ai-add-service/setup-ai-add-service.sh
+./demo/ai-add-service/setup.sh
 ```
