@@ -3,22 +3,21 @@ import "./App.css";
 import { ProductRow } from "./ProductRow";
 
 function App() {
-  const [lastRequest, setLastRequest] = useState(null);
   const [catalog, setCatalog] = useState(null);
+  const [errorOccurred, setErrorOccurred] = useState(false);
 
   const fetchCatalog = useCallback(() => {
+    setErrorOccurred(false);
+
     fetch("/api/products")
       .then((response) => response.json())
       .then((data) => {
         setCatalog(data);
-        setLastRequest({
-          method: "GET",
-          url: "/api/products",
-          status: 200,
-          response: data,
-        });
+      })
+      .catch((e) => {
+        setErrorOccurred(e);
       });
-  }, []);
+  }, [setErrorOccurred, setCatalog]);
 
   const createProduct = useCallback(() => {
     const body = {
@@ -77,7 +76,16 @@ function App() {
           )}
         </>
       ) : (
-        <p>Loading catalog...</p>
+        <>
+          {errorOccurred ? (
+            <p>
+              An error occurred while fetching the catalog. Is the backend
+              running?
+            </p>
+          ) : (
+            <p>Loading catalog...</p>
+          )}
+        </>
       )}
     </>
   );
