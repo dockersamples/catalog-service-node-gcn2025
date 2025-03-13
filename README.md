@@ -1,5 +1,9 @@
 # Catalog Service - Node
 
+> [!NOTE]
+> This repo is a fork of the [Catalog Service (Node)](https://github.com/dockersamples/catalog-service-node) project specifically for Google Cloud Next 2025.
+> It will be archived and not maintained after the event. Go to the original repo for the ongoing project.
+
 This repo is a demo project that demonstrates all of Docker's services in a single project. Specifically, it includes the following:
 
 - A containerized development environment (in a few varieties of setup)
