@@ -28,4 +28,4 @@ jobs:
 
     - name: Deploy test image
       run: |
-        gcloud run deploy cats --image=docker.io/mikesir87/cats:3.0 --port 5000
+        gcloud run deploy cats --region=us-east1 --image=docker.io/mikesir87/cats:3.0 --port 5000
