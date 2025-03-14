@@ -1,0 +1,31 @@
+name: Deploy to Cloud Run
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: 'read'
+      id-token: 'write'
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - id: 'auth'
+      name: 'Authenticate to Google Cloud'
+      uses: 'google-github-actions/auth@v2'
+      with:
+        workload_identity_provider:  ${{ secrets.GCLOUD_WORKLOAD_IDENTITY_PROVIDER }}
+        service_account: ${{ secrets.GCLOUD_SERVICE_ACCOUNT }}
+
+    - name: Set up Cloud SDK
+      uses: 'google-github-actions/setup-gcloud@v2'
+      with:
+        version: ">= 363.0.0"
+
+    - name: Deploy test image
+      run: |
+        gcloud run deploy cats --image=docker.io/mikesir87/cats:3.0 --port 5000
