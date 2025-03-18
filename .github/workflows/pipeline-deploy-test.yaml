@@ -69,7 +69,7 @@ jobs:
 
     - name: Create an Binary Authorization attestation for the image
       run: |
-        echo -n $ATTESTOR_PRIVATE_KEY > /tmp/private-key.pem
+        echo -n "$ATTESTOR_PRIVATE_KEY" > /tmp/private-key.pem
         # chmod 600 /tmp/private-key.pem
         ls -al /tmp
         cat /tmp/private-key.pem | base64
