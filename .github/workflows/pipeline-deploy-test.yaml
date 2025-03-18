@@ -71,7 +71,8 @@ jobs:
       run: |
         echo -n $ATTESTOR_PRIVATE_KEY > /tmp/private-key.pem
         chmod 600 /tmp/private-key.pem
-        cat /tmp/private-key.pem
+        ls -al /tmp
+        cat /tmp/private-key.pem | base64
 
         export IMAGE_TO_ATTEST=${IMAGE_PATH}@${IMAGE_DIGEST}
         gcloud container binauthz create-signature-payload \
