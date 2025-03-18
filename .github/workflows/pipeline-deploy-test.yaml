@@ -81,7 +81,7 @@ jobs:
 
         echo "Found hashes ${DIGEST_HASHES}"
 
-        for DIGEST in "${DIGESTS[@]}"; do
+        for DIGEST in "${DIGEST_HASHES[@]}"; do
           export IMAGE_TO_ATTEST=${IMAGE_PATH}@${DIGEST}
 
           echo "Creating signature payload now..."
