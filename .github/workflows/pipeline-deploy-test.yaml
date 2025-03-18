@@ -70,16 +70,22 @@ jobs:
     - name: Create an Binary Authorization attestation for the image
       run: |
         echo -n $ATTESTOR_PRIVATE_KEY > /tmp/private-key.pem
-        chmod 600 /tmp/private-key.pem
+        # chmod 600 /tmp/private-key.pem
         ls -al /tmp
         cat /tmp/private-key.pem | base64
 
         export IMAGE_TO_ATTEST=${IMAGE_PATH}@${IMAGE_DIGEST}
+
+        echo "Creating signature payload now..."
         gcloud container binauthz create-signature-payload \
           --artifact-url=${IMAGE_PATH}@${IMAGE_DIGEST} > /tmp/generated_payload.json
+
+        cat /tmp/generated_payload.json
         
+        echo "Signing the payload now..."
         openssl dgst -sha256 -sign /tmp/private-key.pem /tmp/generated_payload.json > /tmp/ec_signature
 
+        echo "Creating attestation now..."
         gcloud container binauthz attestations create \
           --project="${GCLOUD_PROJECT_ID}" \
           --artifact-url="${IMAGE_TO_ATTEST}" \
