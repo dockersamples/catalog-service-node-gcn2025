@@ -92,42 +92,29 @@ jobs:
 
   build:
     name: Build and push image
-    needs: [unit-test, integration-test]
+    needs: [ integration-test ]
     runs-on: ubuntu-latest
     permissions:
-      pull-requests: write
+      contents: 'read'
+      id-token: 'write'
     outputs:
-      IMAGE_TAGS: ${{ toJSON( fromJSON(steps.meta.outputs.json).tags ) }}
-
+      IMAGE_DIGEST: steps.build.outputs.digest
+    
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Load Environment Variables
-        uses: ./.github/workflows/load-env
-
-      - name: Set up containerd
-        uses: docker/setup-docker-action@v4
-        with:
-          set-host: true
-          daemon-config: |
-            {
-              "features": {
-                "containerd-snapshotter": true
-              }
-            }
-
+      - uses: actions/checkout@v3
+  
+      # Needed to access DBC builders
       - name: Login to Docker Hub
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-
+    
       - name: Determine image tags and labels
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.DOCKERHUB_NAMESPACE }}/${{ env.IMAGE_PREFIX }}${{ env.IMAGE_NAME }}
+          images: ${{ secrets.GCLOUD_REPO_URL }}
           tags: |
             type=ref,enable=true,event=branch,suffix=--{{sha}}
             type=ref,enable=true,event=branch,suffix=--latest
@@ -135,98 +122,145 @@ jobs:
             type=ref,event=pr
             type=raw,value=latest,enable={{is_default_branch}}
 
+      # Configure Buildx to use the DBC builders
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
         with:
           driver: cloud
-          endpoint: ${{ env.DBC_BUILDER_NAME }}
+          endpoint: ${{ secrets.DBC_BUILDER_NAME }}
 
-      - name: Build and push Docker image
+      # Authenticate to GCloud since we're pushing to GAR
+      - id: 'auth'
+        name: 'Authenticate to Google Cloud'
+        uses: 'google-github-actions/auth@v2'
+        with:
+          workload_identity_provider:  ${{ secrets.GCLOUD_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCLOUD_SERVICE_ACCOUNT }}
+
+      # Configure GCloud
+      - name: Set up Cloud SDK
+        uses: 'google-github-actions/setup-gcloud@v2'
+        with:
+          version: ">= 363.0.0"
+
+      # Configure Docker auth
+      - name: Configure docker with gcloud credentials
+        run: |-
+          gcloud auth configure-docker us-east1-docker.pkg.dev --quiet
+ 
+      # Actually do the build and push now
+      - id: build
+        name: Build and push Docker image
         uses: docker/build-push-action@v6
         with:
           context: .
-          platforms: ${{ github.event_name == 'pull_request' && 'linux/amd64' || 'linux/amd64,linux/arm64' }}
+          platforms: linux/amd64
           provenance: mode=max
           sbom: true
-          push: ${{ github.event_name != 'pull_request' }}
-          load: ${{ github.event_name == 'pull_request' }}
+          push: true
+          load: false
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
 
-      - name: Analyze and compare image against production
-        uses: docker/scout-action@v1
-        if: ${{ github.event_name == 'pull_request' }}
-        with:
-          command: quickview,compare
-          image: ${{ steps.meta.outputs.tags }}
-          to-env: production
-          write-comment: true
-          organization: ${{ env.DOCKERHUB_NAMESPACE }}
-          # TODO Update this to include policy once DBC image loading includes attestations
-          exit-on: vulnerability
+  sign:
+    name: Sign images
+    runs-on: ubuntu-latest
+    needs: [ "build" ]
+    permissions:
+      contents: 'read'
+      id-token: 'write'
 
-  stage-deploy:
+    steps:
+      - name: Install regctl
+        uses: regclient/actions/regctl-installer@main
+        with:
+          release: 'v0.8.2'
+
+      # Authenticate to GCloud since we're going to be adding signatures
+      - id: 'auth'
+        name: 'Authenticate to Google Cloud'
+        uses: 'google-github-actions/auth@v2'
+        with:
+          workload_identity_provider:  ${{ secrets.GCLOUD_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCLOUD_SERVICE_ACCOUNT }}
+
+      # Configure GCloud CLI
+      - name: Set up Cloud SDK
+        uses: 'google-github-actions/setup-gcloud@v2'
+        with:
+          version: ">= 363.0.0"
+
+      # Configure Docker auth
+      - name: Configure docker with gcloud credentials
+        run: |-
+          gcloud auth configure-docker us-east1-docker.pkg.dev --quiet
+    
+    
+      - name: Create an Binary Authorization attestation for the image
+        run: |
+          echo -n "$ATTESTOR_PRIVATE_KEY" > /tmp/private-key.pem
+  
+          regctl manifest get --format raw-body ${IMAGE_PATH}@${IMAGE_DIGEST} > /tmp/image_manifest.json
+          DIGEST_HASHES=$(jq '.manifests[] | select(.platform.os == "linux") | .digest' /tmp/image_manifest.json -r)
+  
+          echo "Found hashes ${DIGEST_HASHES}"
+  
+          for DIGEST in "${DIGEST_HASHES[@]}"; do
+            export IMAGE_TO_ATTEST=${IMAGE_PATH}@${DIGEST}
+  
+            echo "Creating signature payload now..."
+            gcloud container binauthz create-signature-payload \
+              --artifact-url=${IMAGE_TO_ATTEST} > /tmp/generated_payload.json
+  
+            cat /tmp/generated_payload.json
+            
+            echo "Signing the payload now..."
+            openssl dgst -sha256 -sign /tmp/private-key.pem /tmp/generated_payload.json > /tmp/ec_signature
+  
+            echo "Creating attestation now..."
+            gcloud container binauthz attestations create \
+              --project="${GCLOUD_PROJECT_ID}" \
+              --artifact-url="${IMAGE_TO_ATTEST}" \
+              --attestor="projects/${GCLOUD_PROJECT_ID}/attestors/${ATTESTOR_NAME}" \
+              --signature-file=/tmp/ec_signature \
+              --public-key-id="${ATTESTOR_PUBLIC_KEY_ID}" \
+              --validate
+          done
+
+        env:
+          GCLOUD_PROJECT_ID: "gcn-2025"
+          IMAGE_PATH: ${{ secrets.GCLOUD_REPO_URL }}
+          IMAGE_DIGEST: ${{ needs.build.outputs.IMAGE_DIGEST }}
+          ATTESTOR_NAME: ${{ secrets.GCLOUD_ATTESTOR_NAME }}
+          ATTESTOR_PUBLIC_KEY_ID: ${{ secrets.GCLOUD_ATTESTOR_PUBLIC_KEY_ID }}
+          ATTESTOR_PRIVATE_KEY: ${{ secrets.GCLOUD_ATTESTOR_PRIVATE_KEY }}
+
+  deploy:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    name: Deploy to stage environment
-    needs: [build]
+    name: Deploy to production
     runs-on: ubuntu-latest
+    needs: [ "build", "sign" ]
+    permissions:
+      contents: 'read'
+      id-token: 'write'
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Load Environment Variables
-        uses: ./.github/workflows/load-env
-
-      - name: Login to Docker Hub
-        uses: docker/login-action@v3
+      # Authenticate to GCloud since we're going to be adding signatures
+      - id: 'auth'
+        name: 'Authenticate to Google Cloud'
+        uses: 'google-github-actions/auth@v2'
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          workload_identity_provider:  ${{ secrets.GCLOUD_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCLOUD_SERVICE_ACCOUNT }}
 
-      - name: Do the deploy
+      # Configure GCloud CLI
+      - name: Set up Cloud SDK
+        uses: 'google-github-actions/setup-gcloud@v2'
+        with:
+          version: ">= 363.0.0"
+
+      #  Update Google Cloud Run to use the new image
+      - name: Deploy test image
         run: |
-          echo "Do the staging deployment here. Would deploy image ${IMAGE_TAG}"
+          gcloud run deploy catalog-service --region=us-east1 --image=$IMAGE --port 3000
         env:
-          IMAGE_TAG: ${{ fromJSON( needs.build.outputs.IMAGE_TAGS )[0] }}
-      
-      - name: Update Scout environment
-        id: docker-scout-environment
-        uses: docker/scout-action@v1
-        with:
-          command: environment
-          image: ${{ fromJSON( needs.build.outputs.IMAGE_TAGS )[0] }}
-          environment: stage
-          organization: ${{ env.DOCKERHUB_NAMESPACE }}
-
-  prod-deploy:
-    if: github.ref_type == 'tag'
-    name: Deploy to production environment
-    needs: [build]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Load Environment Variables
-        uses: ./.github/workflows/load-env
-
-      - name: Login to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Do the deploy
-        run: |
-          echo "Do the production deployment here. Would deploy image ${IMAGE_TAG}"
-        env:
-          IMAGE_TAG: ${{ fromJSON( needs.build.outputs.IMAGE_TAGS )[0] }}
-      
-      - name: Update Scout environment
-        id: docker-scout-environment
-        uses: docker/scout-action@v1
-        with:
-          command: environment
-          image: ${{ fromJSON( needs.build.outputs.IMAGE_TAGS )[0] }}
-          environment: production
-          organization: ${{ env.DOCKERHUB_NAMESPACE }}
+          IMAGE: ${{ secrets.GCLOUD_REPO_URL }}@${{ needs.build.outputs.IMAGE_DIGEST }}
