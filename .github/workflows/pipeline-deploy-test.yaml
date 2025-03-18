@@ -77,7 +77,7 @@ jobs:
         echo -n "$ATTESTOR_PRIVATE_KEY" > /tmp/private-key.pem
 
         regctl manifest get --format raw-body ${IMAGE_PATH}@${IMAGE_DIGEST} > /tmp/image_manifest.json
-        DIGEST_HASHES=$(jq '.manifests[] | select(.platform.os == "linux") | .digest' /tmp/image/manifest.json -r)
+        DIGEST_HASHES=$(jq '.manifests[] | select(.platform.os == "linux") | .digest' /tmp/image_manifest.json -r)
 
         echo "Found hashes ${DIGEST_HASHES}"
 
