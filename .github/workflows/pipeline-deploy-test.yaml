@@ -67,9 +67,34 @@ jobs:
         tags: ${{ steps.meta.outputs.tags }}
         labels: ${{ steps.meta.outputs.labels }}
 
-    - name: Validate image digest is passed on
+    - name: Create an Binary Authorization attestation for the image
       run: |
+        echo -n $ATTESTOR_PRIVATE_KEY > /tmp/private-key.pem
+        chmod 600 /tmp/private-key.pem
+
+        export IMAGE_TO_ATTEST=${IMAGE_PATH}@${IMAGE_DIGEST}
+        gcloud container binauthz create-signature-payload \
+          --artifact-url=${IMAGE_PATH}@${IMAGE_DIGEST} > /tmp/generated_payload.json
+        
+        openssl dgst -sha256 -sign /tmp/private-key.pem /tmp/generated_payload.json > /tmp/ec_signature
+
+        gcloud container binauthz attestations create \
+          --project="${GCLOUD_PROJECT_ID}" \
+          --artifact-url="${IMAGE_TO_ATTEST}" \
+          --attestor="projects/${GCLOUD_PROJECT_ID}/attestors/${ATTESTOR_NAME}" \
+          --signature-file=/tmp/ec_signature \
+          --public-key-id="${ATTESTOR_PUBLIC_KEY_ID}" \
+          --validate
+
+
         echo "Digest is ${{ steps.build-push-image.outputs.digest }}"
+      env:
+        GCLOUD_PROJECT_ID: "gcn-2025"
+        IMAGE_PATH: ${{ secrets.GCLOUD_REPO_URL }}
+        IMAGE_DIGEST: ${{ steps.build-push-image.outputs.digest }}
+        ATTESTOR_NAME: ${{ secrets.GCLOUD_ATTESTOR_NAME }}
+        ATTESTOR_PUBLIC_KEY_ID: ${{ secrets.GCLOUD_ATTESTOR_PUBLIC_KEY_ID }}
+        ATTESTOR_PRIVATE_KEY: ${{ secrets.GCLOUD_ATTESTOR_PRIVATE_KEY }}
 
     # - name: Deploy test image
     #   run: |
