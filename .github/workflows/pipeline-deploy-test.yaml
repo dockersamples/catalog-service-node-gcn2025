@@ -59,7 +59,7 @@ jobs:
       uses: docker/build-push-action@v6
       with:
         context: .
-        platforms: linux/amd64,linux/arm64
+        platforms: linux/amd64
         provenance: mode=max
         sbom: true
         push: true
@@ -101,6 +101,8 @@ jobs:
         ATTESTOR_PUBLIC_KEY_ID: ${{ secrets.GCLOUD_ATTESTOR_PUBLIC_KEY_ID }}
         ATTESTOR_PRIVATE_KEY: ${{ secrets.GCLOUD_ATTESTOR_PRIVATE_KEY }}
 
-    # - name: Deploy test image
-    #   run: |
-    #     gcloud run deploy cats --region=us-east1 --image=docker.io/mikesir87/cats:3.0 --port 5000
+    - name: Deploy test image
+      run: |
+        gcloud run deploy catalog-service --region=us-east1 --image=$IMAGE --port 3000
+      env:
+        IMAGE: ${{ secrets.GCLOUD_REPO_URL }}@${{ steps.build-push-image.outputs.digest }}
