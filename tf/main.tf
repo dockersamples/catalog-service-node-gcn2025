@@ -129,6 +129,16 @@ resource "google_container_analysis_note" "note" {
   }
 }
 
+resource "google_binary_authorization_policy" "default" {
+  default_admission_rule {
+    evaluation_mode         = "REQUIRE_ATTESTATION"
+    enforcement_mode        = "ENFORCED_BLOCK_AND_AUDIT_LOG"
+    require_attestations_by = [google_binary_authorization_attestor.attestor.name]
+  }
+
+  global_policy_evaluation_mode = "ENABLE"
+}
+
 # Create a public/private keypair for the attestor to use
 # In "real" environments, you'd typically want to use a hardware device
 resource "tls_private_key" "attestor" {
