@@ -99,7 +99,8 @@ jobs:
       id-token: 'write'
     outputs:
       IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
-    
+      DIGESTS_JSON: ${{ steps.hash-extraction.outputs.digests }}    
+
     steps:
       - uses: actions/checkout@v3
   
@@ -162,19 +163,34 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
 
+      - name: Install regctl
+        uses: regclient/actions/regctl-installer@main
+        with:
+          release: 'v0.8.2'
+
+      - name: Extract image hashes
+        id: hash-extraction
+        env:
+          IMAGE_PATH: ${{ secrets.GCLOUD_REPO_URL }}
+          IMAGE_DIGEST: ${{ steps.build.outputs.IMAGE_DIGEST }}
+        run: |
+          DIGEST_HASHES=$(regctl manifest get --format raw-body ${IMAGE_PATH}@${IMAGE_DIGEST} | jq '.manifests[] | select(.platform.os == "linux") | .digest' -r)
+          DIGESTS_JSON=$(echo $DIGEST_HASHES | jq -R '.' | jq -sc .)
+          echo "digests=${DIGESTS_JSON}" >> "$GITHUB_OUTPUT"
+    
+
   sign:
-    name: Sign images
+    name: Sign image
     runs-on: ubuntu-latest
     needs: [ "build" ]
+    strategy:
+      matrix:
+        digest: ${{ fromJSON(needs.build.outputs.DIGESTS_JSON) }}
     permissions:
       contents: 'read'
       id-token: 'write'
 
     steps:
-      - name: Install regctl
-        uses: regclient/actions/regctl-installer@main
-        with:
-          release: 'v0.8.2'
 
       # Authenticate to GCloud since we're going to be adding signatures
       - id: 'auth'
@@ -200,37 +216,30 @@ jobs:
         run: |
           echo -n "$ATTESTOR_PRIVATE_KEY" > /tmp/private-key.pem
   
-          regctl manifest get --format raw-body ${IMAGE_PATH}@${IMAGE_DIGEST} > /tmp/image_manifest.json
-          DIGEST_HASHES=$(jq '.manifests[] | select(.platform.os == "linux") | .digest' /tmp/image_manifest.json -r)
+          export IMAGE_TO_ATTEST=${IMAGE_PATH}@${DIGEST}
   
-          echo "Found hashes ${DIGEST_HASHES}"
-  
-          for DIGEST in "${DIGEST_HASHES[@]}"; do
-            export IMAGE_TO_ATTEST=${IMAGE_PATH}@${DIGEST}
-  
-            echo "Creating signature payload now..."
-            gcloud container binauthz create-signature-payload \
-              --artifact-url=${IMAGE_TO_ATTEST} > /tmp/generated_payload.json
-  
-            cat /tmp/generated_payload.json
-            
-            echo "Signing the payload now..."
-            openssl dgst -sha256 -sign /tmp/private-key.pem /tmp/generated_payload.json > /tmp/ec_signature
-  
-            echo "Creating attestation now..."
-            gcloud container binauthz attestations create \
-              --project="${GCLOUD_PROJECT_ID}" \
-              --artifact-url="${IMAGE_TO_ATTEST}" \
-              --attestor="projects/${GCLOUD_PROJECT_ID}/attestors/${ATTESTOR_NAME}" \
-              --signature-file=/tmp/ec_signature \
-              --public-key-id="${ATTESTOR_PUBLIC_KEY_ID}" \
-              --validate
-          done
+          echo "Creating signature payload now..."
+          gcloud container binauthz create-signature-payload \
+            --artifact-url=${IMAGE_TO_ATTEST} > /tmp/generated_payload.json
+
+          cat /tmp/generated_payload.json
+          
+          echo "Signing the payload now..."
+          openssl dgst -sha256 -sign /tmp/private-key.pem /tmp/generated_payload.json > /tmp/ec_signature
+
+          echo "Creating attestation now..."
+          gcloud container binauthz attestations create \
+            --project="${GCLOUD_PROJECT_ID}" \
+            --artifact-url="${IMAGE_TO_ATTEST}" \
+            --attestor="projects/${GCLOUD_PROJECT_ID}/attestors/${ATTESTOR_NAME}" \
+            --signature-file=/tmp/ec_signature \
+            --public-key-id="${ATTESTOR_PUBLIC_KEY_ID}" \
+            --validate
 
         env:
           GCLOUD_PROJECT_ID: "gcn-2025"
+          DIGEST: ${{ matrix.digest }}
           IMAGE_PATH: ${{ secrets.GCLOUD_REPO_URL }}
-          IMAGE_DIGEST: ${{ needs.build.outputs.IMAGE_DIGEST }}
           ATTESTOR_NAME: ${{ secrets.GCLOUD_ATTESTOR_NAME }}
           ATTESTOR_PUBLIC_KEY_ID: ${{ secrets.GCLOUD_ATTESTOR_PUBLIC_KEY_ID }}
           ATTESTOR_PRIVATE_KEY: ${{ secrets.GCLOUD_ATTESTOR_PRIVATE_KEY }}
