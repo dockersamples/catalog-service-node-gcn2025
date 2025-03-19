@@ -175,7 +175,7 @@ jobs:
           IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
         run: |
           DIGEST_HASHES=$(regctl manifest get --format raw-body ${IMAGE_PATH}@${IMAGE_DIGEST} | jq '.manifests[] | select(.platform.os == "linux") | .digest' -r)
-          DIGESTS_JSON=$(echo $DIGEST_HASHES | jq -R '.' | jq -sc .)
+          DIGESTS_JSON=$(echo "$DIGEST_HASHES" | jq -R '.' | jq -sc .)
           echo "Found digests: ${DIGESTS_JSON}"
           echo "digests=${DIGESTS_JSON}" >> "$GITHUB_OUTPUT"
     
