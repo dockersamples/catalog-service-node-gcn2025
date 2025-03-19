@@ -98,7 +98,7 @@ jobs:
       contents: 'read'
       id-token: 'write'
     outputs:
-      IMAGE_DIGEST: steps.build.outputs.digest
+      IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
     
     steps:
       - uses: actions/checkout@v3
