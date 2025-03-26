@@ -181,7 +181,7 @@ jobs:
     
 
   sign:
-    name: Sign image
+    name: Add CI attestation
     runs-on: ubuntu-latest
     needs: [ "build" ]
     strategy:
